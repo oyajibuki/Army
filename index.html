@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>🎖️ Army Rush</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+    body{background:#111;overflow:hidden;width:100vw;height:100vh;touch-action:none;user-select:none;font-family:'Arial Black',Arial,sans-serif;}
+    canvas{display:block;}
+    #hud{position:fixed;top:0;left:0;right:0;pointer-events:none;display:flex;justify-content:space-between;align-items:center;padding:10px 14px 6px;background:linear-gradient(rgba(0,0,0,.75),transparent);z-index:10;}
+    .hp{background:rgba(0,0,0,.65);border:1px solid rgba(255,255,255,.18);border-radius:20px;padding:5px 14px;color:#fff;font:700 13px 'Arial Black',Arial,sans-serif;}
+    #wave-bar-wrap{position:fixed;top:50px;left:50%;transform:translateX(-50%);width:min(300px,75vw);pointer-events:none;z-index:10;text-align:center;}
+    #wave-label{color:#f1c40f;font:700 10px 'Arial Black';margin-bottom:3px;text-shadow:1px 1px 2px #000;}
+    #wave-bg{height:7px;background:rgba(0,0,0,.55);border-radius:4px;overflow:hidden;border:1px solid rgba(255,215,0,.25);}
+    #wave-fill{height:100%;background:linear-gradient(90deg,#f1c40f,#ff6f00);border-radius:4px;width:0%;transition:width .2s;}
+    #squad-hud{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);font:900 40px 'Arial Black';color:#fff;text-shadow:0 0 18px rgba(33,150,243,.9),3px 3px 0 #000;pointer-events:none;z-index:10;}
+    #lv-hud{position:fixed;bottom:58px;left:50%;transform:translateX(-50%);font:900 15px 'Arial Black';color:#ffd700;text-shadow:0 0 10px #ffd700,2px 2px 0 #000;pointer-events:none;z-index:10;}
+    #toast{position:fixed;top:68px;left:50%;transform:translateX(-50%);background:linear-gradient(135deg,#f39c12,#c0392b);color:#fff;font:900 14px 'Arial Black';padding:7px 20px;border-radius:30px;box-shadow:0 4px 20px rgba(192,57,43,.6);pointer-events:none;z-index:20;opacity:0;transition:opacity .3s;white-space:nowrap;}
+    #toast.show{opacity:1;}
+    #overlay{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(0,0,0,.9);z-index:100;}
+    #overlay h1{font-size:clamp(2rem,9vw,3.5rem);color:#fff;margin-bottom:10px;text-align:center;}
+    #overlay .sub{font-size:clamp(.82rem,3vw,.98rem);color:#bbb;margin-bottom:26px;text-align:center;line-height:2.1;}
+    #overlay button{background:linear-gradient(135deg,#f39c12,#c0392b);border:none;color:#fff;font:900 1.25rem 'Arial Black';cursor:pointer;padding:13px 46px;border-radius:50px;box-shadow:0 8px 24px rgba(192,57,43,.5);}
+    #score-final{color:#f1c40f;font-size:1.1rem;margin-bottom:20px;}
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+  <div class="hp" id="score-box">💰 0</div>
+  <div class="hp" id="wave-box">Wave 1/5</div>
+  <div class="hp" id="wpn-box">🔫 Lv1</div>
+</div>
+<div id="wave-bar-wrap">
+  <div id="wave-label">WAVE進行度</div>
+  <div id="wave-bg"><div id="wave-fill"></div></div>
+</div>
+<div id="squad-hud">×1</div>
+<div id="lv-hud">🔫 Lv 1</div>
+<div id="toast"></div>
+<div id="overlay">
+  <h1>🎖️ Army Rush</h1>
+  <div class="sub">
+    タッチ/ドラッグで左右移動<br>
+    ゲートを通り仲間を増やせ！弾でゲート撃つと数値UP！<br>
+    アイテムで武器レベルUP！Lv5で全員一斉射撃！<br>
+    各WaveのBOSSを倒せ！ボス戦中も敵が来るぞ！
+  </div>
+  <button id="start-btn">▶ スタート</button>
+</div>
+
+<script>
+// ╔══════════════════════════════════════════════════════════════════════╗
+// ║            ★ ゲームバランス調整エリア ★                            ║
+// ║  ここの数値を変えるだけでバランスが変わります                       ║
+// ╚══════════════════════════════════════════════════════════════════════╝
+const CFG = {
+
+  // ── 兵士 ───────────────────────────────────────────────────────────
+  START_SOLDIERS:    1,   // ゲーム開始時の兵士数
+  MAX_SOLDIERS_SHOW: 40,  // 画面に描画する最大兵士数（増やすと重くなる）
+
+  // ── 武器レベル別パラメータ ─────────────────────────────────────────
+  // rate = 射撃間隔（フレーム数。小さい=速い）
+  // dmg  = 1発あたりのダメージ
+  // spreadDeg = 弾の拡散角度（大きい=広がる）
+  WEAPON: [null,
+    { rate:20, dmg:3,  spreadDeg:3  },  // Lv1 ★ここを変えるとLv1の強さが変わる
+    { rate:16, dmg:5,  spreadDeg:9  },  // Lv2
+    { rate:12, dmg:9,  spreadDeg:16 },  // Lv3
+    { rate:8,  dmg:15, spreadDeg:22 },  // Lv4
+    { rate:5,  dmg:22, spreadDeg:30 },  // Lv5 ★ここを変えるとLv5の強さが変わる
+  ],
+
+  // ── 弾の同時最大数 ─────────────────────────────────────────────────
+  // ★ カクカクするなら下げる（50→40など）。火力はダメージで自動補正される
+  MAX_BULLETS: 70,
+
+  // ── ボスのHP（Wave1〜5） ────────────────────────────────────────────
+  // ★ 数値を増やすと強くなる。2倍にすれば2倍長く戦える
+  BOSS_HP: [0, 1200, 2800, 5000, 8500, 16000],
+
+  // ── ボスの攻撃 ──────────────────────────────────────────────────────
+  // attackInterval = 攻撃間隔フレーム（小さい=速い。Wave5はこの値×0.55になる）
+  // dmgBase  = 攻撃ダメージ基本値
+  // dmgWave  = Waveごとに加算されるダメージ
+  BOSS_ATTACK_INTERVAL: 62,  // ★ 小さくするとボスが頻繁に攻撃してくる
+  BOSS_DMG_BASE:         2,  // ★ 大きくするとボスのダメージが増える
+  BOSS_DMG_WAVE:       1.5,  // ★ Wave5ダメ = BASE + 5*WAVE = 2+7.5 ≈ 10
+
+  // ── ボスの前進速度 ──────────────────────────────────────────────────
+  // ★ 大きくするとボスがより速くプレイヤーに近づいてくる（0=前進しない）
+  BOSS_ADVANCE_SPEED: 0.10,  // ボスが毎フレーム前進する距離（Wave数×0.04が加算）
+
+  // ── 通常敵 ─────────────────────────────────────────────────────────
+  ENEMY_HP_BASE:    3,    // ★ 大きくすると硬くなる
+  ENEMY_HP_WAVE:    2.0,  // ★ Wave数ごとに加算されるHP
+  ENEMY_SPD_MIN:    1.2,  // 敵の最低速度
+  ENEMY_SPD_MAX:    2.0,  // 敵の最高速度
+  ENEMY_SPD_WAVE:   0.15, // Waveごとに加算される速度
+
+  // ── Wave進行距離 ───────────────────────────────────────────────────
+  // ★ 大きくするとボスに会うまでの道のりが長くなる
+  WAVE_DIST: 5000,
+};
+// ╔══════════════════════════════════════════════════════════════════════╗
+// ║                       調整エリアここまで                            ║
+// ╚══════════════════════════════════════════════════════════════════════╝
+
+const canvas=document.getElementById('c'), ctx=canvas.getContext('2d');
+let W,H,RL,RR,RW;
+const WLABEL=['','🔫 Lv1','🔫 Lv2','🔫 Lv3','🔫 Lv4','🔫 Lv5 ★'];
+
+let G=null;
+function resize(){
+  W=canvas.width=window.innerWidth;
+  H=canvas.height=window.innerHeight;
+  RW=Math.min(360,W*.80); RL=(W-RW)/2; RR=RL+RW;
+  if(G) G.sqY=H*.82;
+}
+function newGame(){
+  G={
+    state:'play', soldiers:CFG.START_SOLDIERS, score:0, wave:1,
+    WAVE_DIST:CFG.WAVE_DIST, scrolled:0, waveProgress:0,
+    bossPhase:false, bossSpawned:false,
+    sqX:W/2, sqTargetX:W/2, sqY:H*.82,
+    wLv:1, fireCD:0,
+    enemies:[], bullets:[], gates:[], items:[], particles:[],
+    boss:null, bossDeathSeq:null,
+    shakeTimer:0, flashTimer:0, flashCol:'#fff',
+    nextEnemy:80, nextGate:200, nextItem:750,
+    dragging:false, dragX:0,
+  };
+}
+
+// ── INPUT ────────────────────────────────────────────────────────────────
+canvas.addEventListener('pointerdown',e=>{
+  if(!G||G.state!=='play')return;
+  G.dragging=true; G.dragX=e.clientX;
+  canvas.setPointerCapture(e.pointerId);
+},{passive:false});
+canvas.addEventListener('pointermove',e=>{
+  if(!G||!G.dragging)return;
+  G.sqTargetX+=e.clientX-G.dragX;
+  G.sqTargetX=Math.max(RL+40,Math.min(RR-40,G.sqTargetX));
+  G.dragX=e.clientX;
+},{passive:false});
+canvas.addEventListener('pointerup',()=>G&&(G.dragging=false));
+canvas.addEventListener('pointercancel',()=>G&&(G.dragging=false));
+window.addEventListener('keydown',e=>{
+  if(!G||G.state!=='play')return;
+  if(e.key==='ArrowLeft')  G.sqTargetX=Math.max(RL+40,G.sqTargetX-22);
+  if(e.key==='ArrowRight') G.sqTargetX=Math.min(RR-40,G.sqTargetX+22);
+});
+window.addEventListener('resize',resize);
+
+// ── HELPERS ──────────────────────────────────────────────────────────────
+const rnd=(lo,hi)=>lo+Math.random()*(hi-lo);
+const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+const dst=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+
+function pt(x,y,col,n=10,spd=4,ms=2,xs=6){
+  for(let i=0;i<n;i++){
+    const a=Math.random()*Math.PI*2,s=spd*(.5+Math.random());
+    G.particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:35+Math.random()*30,maxLife:65,col,size:ms+Math.random()*(xs-ms),isT:false});
+  }
+}
+function tx(x,y,text,col,sz=22){
+  G.particles.push({x,y,vx:rnd(-.5,.5),vy:-2.8,life:65,maxLife:65,col,text,sz,isT:true});
+}
+let _tt=null;
+function toast(msg,dur=2400){
+  const el=document.getElementById('toast');
+  el.textContent=msg; el.classList.add('show');
+  clearTimeout(_tt); _tt=setTimeout(()=>el.classList.remove('show'),dur);
+}
+function hudUpdate(){
+  document.getElementById('score-box').textContent='💰 '+G.score;
+  document.getElementById('wave-box').textContent='Wave '+G.wave+'/5';
+  document.getElementById('squad-hud').textContent='×'+G.soldiers;
+  document.getElementById('wave-fill').style.width=Math.min(100,G.waveProgress*100)+'%';
+  document.getElementById('wpn-box').textContent=WLABEL[G.wLv];
+  document.getElementById('lv-hud').textContent=WLABEL[G.wLv];
+}
+
+// ── 兵士の隊形座標を返す ──────────────────────────────────────────────────
+function soldierPositions(){
+  const vis=Math.min(G.soldiers, CFG.MAX_SOLDIERS_SHOW);
+  const cols=vis<=1?1:vis<=3?3:vis<=8?4:vis<=15?5:vis<=24?6:vis<=35?7:8;
+  const rows=Math.ceil(vis/cols);
+  const sp=19, pos=[];
+  for(let i=0;i<vis;i++){
+    const col=i%cols, row=Math.floor(i/cols);
+    pos.push({x:G.sqX+(col-(cols-1)/2)*sp, y:G.sqY+(row-(rows-1)/2)*sp*.82});
+  }
+  return pos;
+}
+
+// ── SPAWN ─────────────────────────────────────────────────────────────────
+function spawnRow(extra=0){
+  const count=2+Math.floor(G.wave*.9)+Math.floor(Math.random()*2)+extra;
+  const sp=RW/(count+1);
+  for(let i=1;i<=count;i++){
+    const hp=CFG.ENEMY_HP_BASE+Math.floor(G.wave*CFG.ENEMY_HP_WAVE);
+    const spd=rnd(CFG.ENEMY_SPD_MIN,CFG.ENEMY_SPD_MAX)+G.wave*CFG.ENEMY_SPD_WAVE;
+    G.enemies.push({x:RL+sp*i+rnd(-12,12),y:-32,hp,maxHp:hp,spd,hitCD:0,size:18});
+  }
+}
+function spawnGate(){
+  const pv=Math.floor(rnd(6,32)),nv=-Math.floor(rnd(4,20));
+  const both=Math.random()<.16,gw=68,gh=44,cx=W/2,gap=RW*.26;
+  G.gates.push({x:cx-gap,y:-60,w:gw,h:gh,value:both?Math.floor(rnd(1,8)):nv,spd:2.0,passed:false});
+  G.gates.push({x:cx+gap,y:-60,w:gw,h:gh,value:pv,spd:2.0,passed:false});
+}
+function spawnBoss(){
+  const hp=CFG.BOSS_HP[G.wave];
+  // ★ targetY = H*0.55：プレイヤー(H*0.82)の約27%手前まで来る
+  const targetY=Math.min(H*.55, H-280);
+  G.boss={x:W/2,y:-180,targetY,hp,maxHp:hp,
+    hitCD:0,attackCD:CFG.BOSS_ATTACK_INTERVAL,
+    size:G.wave===5?95:72,dir:1,arrived:false,phase:1};
+  G.bossPhase=true;
+}
+function spawnRoadItem(){
+  const isW=G.wLv<5&&Math.random()<.55;
+  G.items.push({x:rnd(RL+50,RR-50),y:-50,type:isW?'wup':'sol',pulse:0,life:460,spd:1.7});
+}
+function dropItem(x,y){
+  G.items.push({x,y,type:G.wLv<5?'wup':'sol',pulse:0,life:380,spd:0});
+}
+
+// ── SHOOT ─────────────────────────────────────────────────────────────────
+// 全兵士が撃つ表現 ＋ 同時弾数をCFG.MAX_BULLETSで上限。超えた分はダメに乗せる
+function shoot(){
+  const w=CFG.WEAPON[G.wLv];
+  const pos=soldierPositions();
+  const sr=w.spreadDeg*Math.PI/180;
+  const bps=G.wLv>=5?3:G.wLv>=4?2:1; // 兵士1人あたり理想発射数
+
+  const wanted=pos.length*bps;
+  const room=Math.max(0, CFG.MAX_BULLETS - G.bullets.length);
+  const fire=Math.min(wanted, room);
+  if(fire<=0)return; // 上限到達 → スキップ（カクカク防止の核心）
+
+  const scaledDmg=Math.ceil(w.dmg*(wanted/Math.max(1,fire)));
+  for(let i=0;i<fire;i++){
+    const s=pos[Math.floor(i*pos.length/fire)];
+    const angle=-Math.PI/2+rnd(-sr/2,sr/2);
+    G.bullets.push({x:s.x,y:s.y-20,vx:Math.cos(angle)*12,vy:Math.sin(angle)*12,dmg:scaledDmg,life:55});
+  }
+}
+
+// ── ボス撃破演出（3段階）──────────────────────────────────────────────────
+function startBossDeath(bx,by){
+  G.bossDeathSeq={timer:0,bx,by,phase:0};
+}
+function updateBossDeath(){
+  if(!G.bossDeathSeq)return;
+  const seq=G.bossDeathSeq;
+  seq.timer++;
+
+  // phase0: 連続小爆発（0〜70f）
+  if(seq.phase===0){
+    if(seq.timer%5===0){
+      const ex=seq.bx+rnd(-90,90),ey=seq.by+rnd(-70,70);
+      pt(ex,ey,'#ff4500',18,9,4,16); pt(ex,ey,'#ffd700',10,6,3,10); pt(ex,ey,'#fff',6,5,2,8);
+      G.shakeTimer=7;
+    }
+    if(seq.timer===70){seq.phase=1;seq.timer=0;}
+  }
+  // phase1: 超大爆発（0〜35f）
+  if(seq.phase===1){
+    if(seq.timer===1){
+      G.flashCol='#ff6600'; G.flashTimer=30;
+      for(let i=0;i<10;i++){
+        const a=(i/10)*Math.PI*2, d=70+Math.random()*50;
+        pt(seq.bx+Math.cos(a)*d, seq.by+Math.sin(a)*d, '#ff2200',28,13,5,20);
+        pt(seq.bx+Math.cos(a)*d, seq.by+Math.sin(a)*d, '#ffaa00',16,9,4,14);
+      }
+      pt(seq.bx,seq.by,'#fff',70,18,5,24);
+      pt(seq.bx,seq.by,'#ff6600',55,14,4,18);
+      G.shakeTimer=50;
+      tx(seq.bx,seq.by-90,'DEFEATED!!','#ffd700',42);
+      tx(seq.bx,seq.by-50,'+'+(500+G.wave*200),'#ff6600',30);
+      G.score+=500+G.wave*200;
+    }
+    if(seq.timer===8){G.flashCol='#ffffff';G.flashTimer=18;}
+    if(seq.timer===35){seq.phase=2;seq.timer=0;}
+  }
+  // phase2: 後処理（0〜35f）
+  if(seq.phase===2){
+    if(seq.timer===1){
+      dropItem(seq.bx,seq.by+20);
+      G.boss=null;
+      if(G.wave>=5){G.state='win';G.bossDeathSeq=null;return;}
+      G.wave++;G.scrolled=0;G.waveProgress=0;G.bossSpawned=false;G.bossPhase=false;
+      G.enemies=[];G.gates=[];
+      G.nextEnemy=60;G.nextGate=180;G.nextItem=650;
+      hudUpdate();
+    }
+    if(seq.timer>=35)G.bossDeathSeq=null;
+  }
+}
+
+// ── UPDATE ────────────────────────────────────────────────────────────────
+function update(){
+  if(!G||G.state!=='play')return;
+  G.sqX+=(G.sqTargetX-G.sqX)*.16;
+  G.sqX=clamp(G.sqX,RL+40,RR-40);
+
+  G.scrolled+=3;
+  if(!G.bossPhase){
+    G.waveProgress=Math.min(1,G.scrolled/G.WAVE_DIST);
+    if(!G.bossSpawned&&G.waveProgress>=1){G.bossSpawned=true;spawnBoss();}
+  }
+  if(G.flashTimer>0)G.flashTimer--;
+  updateBossDeath();
+
+  // 射撃
+  const hasT=G.enemies.length>0||G.bossPhase||G.gates.length>0;
+  G.fireCD--;
+  if(G.fireCD<=0&&hasT){shoot();G.fireCD=CFG.WEAPON[G.wLv].rate;}
+
+  // ── 弾 ──
+  G.bullets=G.bullets.filter(b=>{
+    b.x+=b.vx; b.y+=b.vy; b.life--;
+    if(b.life<=0||b.y<0)return false;
+
+    for(let i=G.enemies.length-1;i>=0;i--){
+      const e=G.enemies[i];
+      if(dst(b,e)<e.size+5){
+        e.hp-=b.dmg; e.hitCD=7;
+        pt(b.x,b.y,'#ff7043',3,2);
+        if(e.hp<=0){G.score+=10;pt(e.x,e.y,'#ff3d00',8,5,3,7);tx(e.x,e.y-12,'+10','#ffd700');G.enemies.splice(i,1);}
+        return false;
+      }
+    }
+    if(G.boss&&!G.bossDeathSeq&&dst(b,G.boss)<G.boss.size+5){
+      G.boss.hp-=b.dmg; G.boss.hitCD=5;
+      pt(b.x,b.y,'#ff7043',3,2);
+      return false;
+    }
+    for(let i=0;i<G.gates.length;i++){
+      const g=G.gates[i];
+      if(!g.passed&&b.x>g.x-g.w/2&&b.x<g.x+g.w/2&&b.y>g.y-g.h/2&&b.y<g.y+g.h/2){
+        g.value++;pt(b.x,b.y,g.value>=0?'#00e676':'#ff5252',3,2);return false;
+      }
+    }
+    return true;
+  });
+
+  // ── 敵 ──
+  G.enemies=G.enemies.filter(e=>{
+    e.y+=e.spd; if(e.hitCD>0)e.hitCD--;
+    if(e.y>G.sqY-20){
+      G.soldiers=Math.max(0,G.soldiers-1);
+      tx(G.sqX+rnd(-26,26),G.sqY-44,'-1','#ff1744');
+      pt(G.sqX,G.sqY-22,'#ff1744',5,3);
+      G.shakeTimer=10;
+      if(G.soldiers<=0)G.state='gameover';
+      return false;
+    }
+    return true;
+  });
+
+  // ── ゲート ──
+  G.gates=G.gates.filter(g=>{
+    g.y+=g.spd;
+    if(!g.passed&&G.sqX>g.x-g.w/2&&G.sqX<g.x+g.w/2&&G.sqY>g.y-g.h/2&&G.sqY<g.y+g.h/2){
+      g.passed=true;
+      G.soldiers=Math.max(1,G.soldiers+g.value);
+      const c=g.value>=0?'#00e676':'#ff1744';
+      pt(g.x,g.y,c,18,6); tx(g.x,g.y-28,(g.value>=0?'+':'')+g.value,c,28);
+      return false;
+    }
+    return g.y<H+60;
+  });
+
+  // ── アイテム ──
+  G.items=G.items.filter(item=>{
+    item.pulse++; if(item.spd>0)item.y+=item.spd; item.life--;
+    if(dst(item,{x:G.sqX,y:G.sqY})<52){
+      if(item.type==='wup'&&G.wLv<5){
+        G.wLv++;
+        pt(item.x,item.y,'#ffd700',28,9,3,10);
+        tx(item.x,item.y-30,'LEVEL UP!','#ffd700',26);
+        toast(WLABEL[G.wLv]+(G.wLv===5?' ★MAX POWER★':''));
+        if(G.wLv===5){pt(item.x,item.y,'#ff6600',40,12,4,14);G.shakeTimer=8;}
+        hudUpdate();
+      }else{
+        const n=5+G.wave*3; G.soldiers+=n;
+        pt(item.x,item.y,'#00e676',22,7);
+        tx(item.x,item.y-30,'+'+n+'人！','#00e676',24);
+      }
+      return false;
+    }
+    return item.life>0&&item.y<H+80;
+  });
+
+  // ── ボス ──
+  if(G.boss&&!G.bossDeathSeq){
+    const b=G.boss; if(b.hitCD>0)b.hitCD--;
+    if(!b.arrived){
+      b.y+=2.8; if(b.y>=b.targetY)b.arrived=true;
+    }else{
+      // 左右移動（Waveが高いほど速い）
+      const sideSpd=1.5+G.wave*.4;
+      b.x+=b.dir*sideSpd;
+      if(b.x>RR-85)b.dir=-1; if(b.x<RL+85)b.dir=1;
+
+      // ★ ボスがジワジワ前進（プレイヤーに迫る恐怖感）
+      const advance=CFG.BOSS_ADVANCE_SPEED+G.wave*0.04;
+      b.y=Math.min(b.y+advance, G.sqY-130);
+
+      // 攻撃
+      const atkCD=G.wave===5
+        ? Math.floor(CFG.BOSS_ATTACK_INTERVAL*.5)  // Wave5は攻撃間隔が半分
+        : CFG.BOSS_ATTACK_INTERVAL;
+      b.attackCD--;
+      if(b.attackCD<=0){
+        b.attackCD=atkCD+Math.floor(Math.random()*15);
+        const dmg=Math.ceil(CFG.BOSS_DMG_BASE+G.wave*CFG.BOSS_DMG_WAVE);
+        G.soldiers=Math.max(0,G.soldiers-dmg);
+        G.shakeTimer=18;
+        tx(G.sqX,G.sqY-55,'-'+dmg,'#ff1744',32);
+        pt(G.sqX,G.sqY-30,'#ff0000',14,6);
+        if(G.soldiers<=0)G.state='gameover';
+        // Wave4〜: 爆弾も飛ばす
+        if(G.wave>=4){
+          for(let i=0;i<3;i++){
+            G.bullets.push({x:b.x,y:b.y+55,vx:[-2,0,2][i],vy:4.5,dmg:0,life:55,isBomb:true});
+          }
+        }
+      }
+    }
+    // HP半分でエンレイジ
+    if(G.wave>=3&&b.hp<b.maxHp*.5&&b.phase===1){
+      b.phase=2;
+      toast('⚠️ BOSS ENRAGED ⚠️',1600);
+      G.flashCol='#ff0000'; G.flashTimer=14;
+    }
+    if(b.hp<=0&&!G.bossDeathSeq) startBossDeath(b.x,b.y);
+  }
+
+  // ── ボス弾（爆弾） ──
+  G.bullets=G.bullets.filter(b=>{
+    if(!b.isBomb)return true;
+    b.x+=b.vx; b.y+=b.vy; b.life--;
+    if(b.y>G.sqY-20){
+      const dmg=4; G.soldiers=Math.max(0,G.soldiers-dmg);
+      pt(b.x,b.y,'#ff4500',12,5);
+      tx(b.x,G.sqY-44,'-'+dmg,'#ff1744',26);
+      G.shakeTimer=10;
+      if(G.soldiers<=0)G.state='gameover';
+      return false;
+    }
+    return b.life>0;
+  });
+
+  // ── スポーン ──
+  const eInt=G.bossPhase?Math.max(42,155-G.wave*15):Math.max(100,280-G.wave*20);
+  if(G.scrolled>=G.nextEnemy){
+    spawnRow(G.bossPhase?Math.floor(G.wave/2):0);
+    G.nextEnemy+=eInt+rnd(-12,12);
+  }
+  if(!G.bossPhase){
+    if(G.scrolled>=G.nextGate){spawnGate();G.nextGate+=rnd(255,415);}
+    if(G.scrolled>=G.nextItem){spawnRoadItem();G.nextItem+=rnd(480,820);}
+  }
+
+  // ── パーティクル ──
+  G.particles=G.particles.filter(p=>{
+    p.x+=p.vx; p.y+=p.vy; if(!p.isT)p.vy+=.06;
+    p.life--; return p.life>0;
+  });
+  if(G.shakeTimer>0)G.shakeTimer--;
+  hudUpdate();
+}
+
+// ── DRAW ──────────────────────────────────────────────────────────────────
+function draw(){
+  if(!G)return;
+  ctx.clearRect(0,0,W,H);
+  let sx=0,sy=0;
+  if(G.shakeTimer>0){sx=(Math.random()-.5)*11;sy=(Math.random()-.5)*11;ctx.save();ctx.translate(sx,sy);}
+  drawRoad(); drawGates(); drawItems(); drawEnemies();
+  if(G.boss&&!G.bossDeathSeq) drawBoss();
+  drawSquad(); drawBullets(); drawParticles();
+  if(G.shakeTimer>0)ctx.restore();
+  if(G.flashTimer>0){
+    ctx.save();ctx.globalAlpha=(G.flashTimer/30)*.38;
+    ctx.fillStyle=G.flashCol;ctx.fillRect(0,0,W,H);ctx.restore();
+  }
+}
+
+function drawRoad(){
+  ctx.fillStyle='#2a5016';ctx.fillRect(0,0,W,H);
+  [0,100,200,300,400,500,600,700,800].forEach(y=>{dTree(RL-42,y);dTree(RR+42,y+50);});
+  ctx.fillStyle='#455a64';ctx.fillRect(RL,0,RW,H);
+  ctx.fillStyle='rgba(0,0,0,.08)';
+  for(let y=0;y<H;y+=80)ctx.fillRect(RL,y,RW,40);
+  ctx.fillStyle='#eceff1';ctx.fillRect(RL-8,0,8,H);ctx.fillRect(RR,0,8,H);
+  ctx.save();ctx.setLineDash([36,28]);ctx.strokeStyle='rgba(255,255,180,.3)';ctx.lineWidth=3;
+  [RL+RW/3,RL+RW*2/3].forEach(x=>{ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();});
+  ctx.restore();
+  if(!G.bossPhase){
+    const gy=(1-G.waveProgress)*H*.5-20;
+    if(gy>-20&&gy<H){
+      ctx.save();ctx.strokeStyle='#ffd700';ctx.lineWidth=4;ctx.setLineDash([14,10]);
+      ctx.shadowBlur=12;ctx.shadowColor='#ffd700';
+      ctx.beginPath();ctx.moveTo(RL,gy);ctx.lineTo(RR,gy);ctx.stroke();ctx.shadowBlur=0;
+      ctx.fillStyle='#ffd700';ctx.font='bold 11px Arial Black';ctx.textAlign='center';
+      ctx.fillText('⚠️ BOSS ZONE ⚠️',W/2,gy-7);ctx.restore();
+    }
+  }
+}
+function dTree(x,y){
+  ctx.save();ctx.translate(x,y);
+  ctx.fillStyle='#4e342e';ctx.fillRect(-5,0,10,22);
+  ctx.fillStyle='#2e7d32';ctx.beginPath();ctx.moveTo(0,-40);ctx.lineTo(22,0);ctx.lineTo(-22,0);ctx.closePath();ctx.fill();
+  ctx.fillStyle='#388e3c';ctx.beginPath();ctx.moveTo(0,-54);ctx.lineTo(17,-14);ctx.lineTo(-17,-14);ctx.closePath();ctx.fill();
+  ctx.restore();
+}
+
+function dSoldier(x,y,sc=1,bright=false){
+  ctx.save();ctx.translate(x,y);ctx.scale(sc,sc);
+  ctx.fillStyle='rgba(0,0,0,.2)';ctx.beginPath();ctx.ellipse(0,12,8,3,0,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle=bright?'#1e88e5':'#1565c0';ctx.beginPath();ctx.roundRect(-7,-7,14,20,3);ctx.fill();
+  ctx.fillStyle='#1976d2';ctx.beginPath();ctx.roundRect(-4,-6,7,13,2);ctx.fill();
+  ctx.fillStyle='#5d4037';ctx.fillRect(-7,3,14,3);
+  ctx.fillStyle='#f5cba7';ctx.beginPath();ctx.arc(0,-14,7,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle=bright?'#0d47a1':'#0a3d91';ctx.beginPath();ctx.ellipse(0,-17,8,6,0,0,Math.PI);ctx.fill();ctx.fillRect(-8,-18,16,4);
+  ctx.fillStyle='#333';ctx.fillRect(-3,-15,2,2);ctx.fillRect(1,-15,2,2);
+  ctx.fillStyle='#546e7a';ctx.fillRect(5,-8,3,14);ctx.fillStyle='#78909c';ctx.fillRect(5,-8,6,4);
+  ctx.restore();
+}
+
+function drawSquad(){
+  const pos=soldierPositions();
+  const rows=pos.length>0?Math.ceil(pos.length/(pos.length<=1?1:Math.min(pos.length,8))):1;
+  pos.forEach((s,i)=>{
+    const row=Math.floor(i/8);
+    dSoldier(s.x,s.y,row===0?1.05:.92,row===0);
+  });
+  if(G.soldiers>CFG.MAX_SOLDIERS_SHOW){
+    ctx.fillStyle='rgba(255,255,255,.9)';ctx.font='bold 11px Arial Black';ctx.textAlign='center';
+    const lastY=pos[pos.length-1]?.y||G.sqY;
+    ctx.fillText('+'+(G.soldiers-CFG.MAX_SOLDIERS_SHOW),G.sqX,lastY+22);
+  }
+}
+
+function drawEnemies(){
+  G.enemies.forEach(e=>{
+    ctx.save();ctx.translate(e.x,e.y);
+    if(e.hitCD>0)ctx.filter='brightness(2.5)';
+    ctx.fillStyle='rgba(0,0,0,.22)';ctx.beginPath();ctx.ellipse(0,16,10,4,0,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#b71c1c';ctx.beginPath();ctx.roundRect(-8,-8,16,22,3);ctx.fill();
+    ctx.fillStyle='#e53935';ctx.beginPath();ctx.roundRect(-5,-7,8,14,2);ctx.fill();
+    ctx.fillStyle='#6d4c41';ctx.fillRect(-8,4,16,3);
+    ctx.fillStyle='#f5cba7';ctx.beginPath();ctx.arc(0,-17,8,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#c62828';ctx.beginPath();ctx.ellipse(0,-20,9,7,0,0,Math.PI);ctx.fill();
+    ctx.fillRect(-9,-21,18,5);ctx.fillStyle='#e53935';ctx.fillRect(-9,-21,18,3);
+    ctx.filter='';ctx.fillStyle='#333';ctx.fillRect(-3,-19,2,2);ctx.fillRect(2,-19,2,2);
+    if(e.maxHp>1){
+      const r=e.hp/e.maxHp,bw=24;
+      ctx.fillStyle='rgba(0,0,0,.6)';ctx.fillRect(-bw/2,-30,bw,4);
+      ctx.fillStyle=r>.5?'#4caf50':r>.25?'#ff9800':'#f44336';ctx.fillRect(-bw/2,-30,bw*r,4);
+    }
+    ctx.restore();
+  });
+}
+
+function drawGates(){
+  G.gates.forEach(g=>{
+    const pos=g.value>=0;
+    ctx.save();ctx.translate(g.x,g.y);
+    const grd=ctx.createLinearGradient(-g.w/2,-g.h/2,g.w/2,g.h/2);
+    grd.addColorStop(0,pos?'#00695c':'#b71c1c');grd.addColorStop(1,pos?'#004d40':'#7f0000');
+    ctx.fillStyle=grd;ctx.beginPath();ctx.roundRect(-g.w/2,-g.h/2,g.w,g.h,22);ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,.18)';ctx.beginPath();ctx.roundRect(-g.w/2+4,-g.h/2+4,g.w/2,g.h*.38,14);ctx.fill();
+    ctx.shadowBlur=16;ctx.shadowColor=pos?'#00e5ff':'#ff1744';
+    ctx.strokeStyle=pos?'#80deea':'#ff8a80';ctx.lineWidth=2.5;
+    ctx.beginPath();ctx.roundRect(-g.w/2,-g.h/2,g.w,g.h,22);ctx.stroke();ctx.shadowBlur=0;
+    ctx.fillStyle='#fff';ctx.font='bold 26px Arial Black';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.shadowBlur=6;ctx.shadowColor='rgba(0,0,0,.6)';ctx.fillText((pos?'+':'')+g.value,0,0);ctx.shadowBlur=0;
+    ctx.restore();
+  });
+}
+
+function drawItems(){
+  G.items.forEach(item=>{
+    const wv=Math.sin(item.pulse*.1)*7, c=item.type==='wup'?'#ffd700':'#00e676';
+    ctx.save();ctx.translate(item.x,item.y-20+wv);
+    ctx.shadowBlur=20;ctx.shadowColor=c;
+    ctx.fillStyle=c+'33';ctx.beginPath();ctx.arc(0,0,30,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle=c;ctx.lineWidth=2.5;ctx.stroke();ctx.shadowBlur=0;
+    ctx.font='28px serif';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText(item.type==='wup'?'⬆️':'👥',0,0);ctx.restore();
+    ctx.fillStyle=c;ctx.font='bold 10px Arial Black';ctx.textAlign='center';
+    ctx.fillText(item.type==='wup'?'LEVEL UP!':'兵士補充！',item.x,item.y-56+wv);
+  });
+}
+
+function drawBoss(){
+  const b=G.boss;
+  const pulse=b.phase===2?Math.sin(Date.now()*.012)*.08:0;
+  ctx.save();ctx.translate(b.x,b.y);
+  if(b.hitCD>0)ctx.filter='brightness(3)';
+  const aura=ctx.createRadialGradient(0,0,20,0,0,b.size*1.6);
+  aura.addColorStop(0,b.phase===2?'rgba(255,80,0,.4)':'rgba(200,0,0,.28)');aura.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=aura;ctx.beginPath();ctx.arc(0,10,b.size*1.7,0,Math.PI*2);ctx.fill();
+  const sc=1+pulse;ctx.scale(sc,sc);
+  ctx.fillStyle='rgba(0,0,0,.4)';ctx.beginPath();ctx.ellipse(0,72,62,19,0,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#4a0000';ctx.beginPath();ctx.roundRect(-24,38,20,36,5);ctx.fill();ctx.beginPath();ctx.roundRect(4,38,20,36,5);ctx.fill();
+  ctx.fillStyle='#6a0000';ctx.beginPath();ctx.roundRect(-72,-26,32,58,14);ctx.fill();ctx.beginPath();ctx.roundRect(40,-26,32,58,14);ctx.fill();
+  ctx.fillStyle='#ef9a9a';ctx.beginPath();ctx.arc(-57,36,17,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.arc(57,36,17,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle=b.phase===2?'#aa0000':'#8b0000';ctx.beginPath();ctx.roundRect(-44,-38,88,82,10);ctx.fill();
+  ctx.fillStyle='#9b1515';ctx.beginPath();ctx.roundRect(-32,-30,50,60,8);ctx.fill();
+  ctx.fillStyle='#ffb300';ctx.fillRect(-44,22,88,9);ctx.fillStyle='#ffd54f';ctx.fillRect(-7,24,14,7);
+  ctx.filter='';
+  ctx.fillStyle='#f5cba7';ctx.beginPath();ctx.arc(0,-60,b.size===95?44:37,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#1a0000';ctx.beginPath();ctx.ellipse(0,-68,41,28,0,0,Math.PI);ctx.fill();ctx.fillRect(-41,-80,82,16);
+  ctx.fillStyle='#6a0000';ctx.fillRect(-41,-80,82,7);
+  ctx.strokeStyle='#8B4513';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(-12,-70);ctx.lineTo(7,-54);ctx.stroke();
+  const ec=b.phase===2?'#ff6600':'#ff0000';
+  ctx.fillStyle=ec;ctx.shadowBlur=18;ctx.shadowColor=ec;
+  ctx.fillRect(-20,-67,14,11);ctx.fillRect(6,-67,14,11);
+  ctx.fillStyle='#ffeb3b';ctx.fillRect(-18,-65,10,8);ctx.fillRect(8,-65,10,8);ctx.shadowBlur=0;
+  // HP bar
+  const bw=G.wave===5?200:170, r=b.hp/b.maxHp;
+  ctx.fillStyle='rgba(0,0,0,.75)';ctx.fillRect(-bw/2,-120,bw,15);
+  ctx.fillStyle=r>.5?'#d32f2f':r>.25?'#f57c00':'#ff1744';ctx.fillRect(-bw/2,-120,bw*r,15);
+  ctx.strokeStyle='rgba(255,255,255,.3)';ctx.lineWidth=1.5;ctx.strokeRect(-bw/2,-120,bw,15);
+  const lbl=G.wave===5?'⚠️ FINAL BOSS ⚠️':'⚠️ BOSS ⚠️';
+  const lc=G.wave===5?'#ff6600':'#ffd700';
+  ctx.fillStyle=lc;ctx.font=`bold ${G.wave===5?19:16}px Arial Black`;ctx.textAlign='center';
+  ctx.shadowBlur=16;ctx.shadowColor=lc;ctx.fillText(lbl,0,-136);ctx.shadowBlur=0;
+  ctx.restore();
+}
+
+function drawBullets(){
+  G.bullets.forEach(b=>{
+    if(b.isBomb){
+      ctx.save();ctx.translate(b.x,b.y);
+      ctx.fillStyle='#ff4500';ctx.shadowBlur=10;ctx.shadowColor='#ff4500';
+      ctx.beginPath();ctx.arc(0,0,6,0,Math.PI*2);ctx.fill();
+      ctx.shadowBlur=0;ctx.restore();return;
+    }
+    ctx.save();ctx.translate(b.x,b.y);ctx.rotate(Math.atan2(b.vy,b.vx));
+    const isMax=G.wLv===5;
+    const grd=ctx.createLinearGradient(-14,0,4,0);
+    grd.addColorStop(0,isMax?'rgba(255,255,200,0)':'rgba(255,230,0,0)');
+    grd.addColorStop(1,isMax?'#ffffff':'#ffe500');
+    ctx.fillStyle=grd;ctx.fillRect(-14,-2,18,4);
+    if(isMax){ctx.shadowBlur=8;ctx.shadowColor='#fff';}
+    ctx.fillStyle=isMax?'#fff':'#fff9c4';ctx.beginPath();ctx.arc(0,0,isMax?4:2.5,0,Math.PI*2);ctx.fill();
+    ctx.shadowBlur=0;ctx.restore();
+  });
+}
+
+function drawParticles(){
+  G.particles.forEach(p=>{
+    ctx.save();ctx.globalAlpha=p.life/p.maxLife;
+    if(p.isT){
+      ctx.fillStyle=p.col;ctx.font=`900 ${p.sz}px Arial Black`;
+      ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.shadowBlur=8;ctx.shadowColor='rgba(0,0,0,.6)';ctx.fillText(p.text,p.x,p.y);
+    }else{
+      ctx.fillStyle=p.col;ctx.beginPath();ctx.arc(p.x,p.y,p.size*(p.life/p.maxLife),0,Math.PI*2);ctx.fill();
+    }
+    ctx.shadowBlur=0;ctx.restore();
+  });
+}
+
+// ── END ──────────────────────────────────────────────────────────────────
+function showEnd(win){
+  document.getElementById('overlay').innerHTML=win
+    ?`<h1>🏆 全Wave クリア！</h1><div class="sub">完全勝利！伝説の英雄！</div><div id="score-final">最終スコア: ${G.score}</div><div style="background:rgba(255,255,255,0.1);padding:16px;border-radius:12px;margin:12px 0;border:1px solid rgba(255,255,255,0.2);"><p style="color:white;font-weight:900;font-size:16px;margin:0 0 10px;">OshiPayの応援宜しく！🔥</p><a href="https://oshipay.streamlit.app/?page=support&user=a81f2ae1-f7c8-4aef-9430-5e8dea2bfb56&name=あさぎり&icon=💻&acct=acct_1T6prLJxxP0VtABn" target="_blank" rel="noopener noreferrer" style="display:inline-block;"><img src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=https%3A%2F%2Foshipay.streamlit.app%2F%3Fpage%3Dsupport%26user%3Da81f2ae1-f7c8-4aef-9430-5e8dea2bfb56%26name%3D%E3%81%82%E3%81%95%E3%81%8E%E3%82%8A%26icon%3D%F0%9F%92%BB%26acct%3Dacct_1T6prLJxxP0VtABn" alt="OshiPay QR" style="width:140px;height:140px;border:3px solid white;border-radius:8px;background:white;"></a><p style="font-size:11px;color:#fde047;margin:8px 0 0;font-weight:bold;">↑ 画像をタップで応援ページへ ↑</p></div><button id="start-btn">もう一度！</button>`
+    :`<h1>💀 ゲームオーバー</h1><div class="sub">兵士が全滅…また挑戦！</div><div id="score-final">スコア: ${G.score}</div><button id="start-btn">もう一度！</button>`;
+  document.getElementById('overlay').style.display='flex';
+  document.getElementById('start-btn').addEventListener('click',startGame);
+}
+
+let rafId=null;
+function loop(){update();draw();
+  if(G.state==='gameover'){showEnd(false);return;}
+  if(G.state==='win'){showEnd(true);return;}
+  rafId=requestAnimationFrame(loop);
+}
+function startGame(){
+  if(rafId)cancelAnimationFrame(rafId);
+  document.getElementById('overlay').style.display='none';
+  resize();newGame();rafId=requestAnimationFrame(loop);
+}
+document.getElementById('start-btn').addEventListener('click',startGame);
+resize();
+</script>
+
+
+<script>
+// アクセスカウンター（ページ表示時に1回だけ送信）
+fetch("https://script.google.com/macros/s/AKfycbznxYkj5ixnK_pHkGR8LUYhEYdvSYpaiF3x4LaZy964wlu068oak1X1uuIiyqCEtGWF/exec?page=army")
+  .catch(() => {});
+</script>
+
+
+</body>
+</html>
